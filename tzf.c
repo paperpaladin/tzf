@@ -127,6 +127,28 @@ typedef struct {
 	int32_t corr;
 } Leap;
 
+/* The POSIX TZ string in the footer, which governs every instant after the
+ * last explicit transition. Without it a reader has to either extrapolate the
+ * last transition forever -- wrong for every DST zone from 2038 on -- or admit
+ * it does not know. RFC 8536 3.3 plus POSIX, and the v3 extension that widens
+ * the transition hour from 0..24 to -167..167. */
+#define TZ_AB 32
+
+typedef struct {
+	int kind;		/* 'J' 1..365 no leap day, 'D' 0..365, 'M' */
+	int n;			/* for 'J' and 'D' */
+	int mon, week, dow;	/* for 'M': month 1..12, week 1..5, dow 0..6 */
+	int32_t time;		/* seconds from local midnight; default 02:00 */
+} Prule;
+
+typedef struct {
+	int present;		/* a non-empty TZ string was parsed */
+	int has_dst;
+	char std[TZ_AB], dst[TZ_AB];
+	int32_t stdoff, dstoff;	/* seconds east of UTC, sign already flipped */
+	Prule start, end;
+} Ptz;
+
 typedef struct {
 	char version;		/* raw version byte: '\0', '2', '3', ... */
 	int v2;			/* a v2+ block is present and was used */
@@ -141,6 +163,7 @@ typedef struct {
 
 	const char *footer;	/* TZ string, without the framing newlines */
 	size_t footerlen;
+	Ptz p;
 	int deftype;		/* type in effect before the first transition */
 } Tz;
 
@@ -321,6 +344,8 @@ static void pick_deftype(Tz *z)
 		z->deftype = z->tidx[0];
 }
 
+static void footer_parse(Tz *z);
+
 static void tz_read(Tz *z, const uint8_t *buf, size_t len)
 {
 	Rd r = { buf, len, 0, 0 };
@@ -388,6 +413,7 @@ static void tz_read(Tz *z, const uint8_t *buf, size_t len)
 	if (memchr(z->footer, '\n', z->footerlen))
 		fail("TZ string footer contains an embedded newline");
 	pick_deftype(z);
+	footer_parse(z);
 }
 
 /* ---------------------------------------------------------------- calendar */
@@ -407,6 +433,16 @@ static void civil_from_days(int64_t z, int64_t *y, int *m, int *d)
 	*d = (int)(doy - (153 * mp + 2) / 5 + 1);
 	*m = (int)(mp + (mp < 10 ? 3 : -9));
 	*y = yoe + era * 400 + (*m <= 2);
+}
+
+static int64_t days_from_civil(int64_t y, int m, int d)
+{
+	y -= m <= 2;
+	int64_t era = (y >= 0 ? y : y - 399) / 400;
+	int64_t yoe = y - era * 400;
+	int64_t doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+	int64_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+	return era * 146097 + doe - 719468;
 }
 
 static int64_t fdiv(int64_t a, int64_t b)
@@ -434,6 +470,306 @@ static void iso_utc(int64_t t, char *out, size_t n)
 		 (long long)y, m, d, sod / 3600, sod / 60 % 60, sod % 60);
 }
 
+/* ------------------------------------------------------------- TZ footer */
+
+/* POSIX TZ string:  std offset [ dst [offset] [,start[/time],end[/time]] ]
+ *
+ * The parser is hand-written because the alternative is a regex library, and
+ * because every one of these fields has a range that matters. Errors are
+ * fatal: a footer we cannot read is the half of the file that covers every
+ * instant from 2038 onward, and guessing at it is how a reader ends up
+ * extrapolating the last transition and sounding confident about 2090.
+ */
+
+static void pf_abbr(const char **s, char *out, const char *what)
+{
+	const char *p = *s;
+	size_t n = 0;
+	if (*p == '<') {
+		p++;
+		while (*p && *p != '>') {
+			if (n + 1 >= TZ_AB)
+				fail("TZ string: %s abbreviation too long",
+				     what);
+			out[n++] = *p++;
+		}
+		if (*p != '>')
+			fail("TZ string: unterminated <> around %s "
+			     "abbreviation", what);
+		p++;
+	} else {
+		/* POSIX: no digits, colon, comma, plus or minus. The quoted
+		 * form above exists precisely because tzdb abbreviations like
+		 * "+0630" break that rule. */
+		while (*p && !strchr("0123456789:,+-", *p)) {
+			if (n + 1 >= TZ_AB)
+				fail("TZ string: %s abbreviation too long",
+				     what);
+			out[n++] = *p++;
+		}
+	}
+	if (n == 0)
+		fail("TZ string: empty %s abbreviation", what);
+	out[n] = '\0';
+	*s = p;
+}
+
+/* [+-]hh[:mm[:ss]]. maxhour is 24 for an offset and 167 for a v3 transition
+ * time, which is the whole point of format version 3: Asia/Gaza's rule fires
+ * at hour 50, two days and two hours past the nominal day. */
+static int32_t pf_hms(const char **s, int maxhour, const char *what)
+{
+	const char *p = *s;
+	int sign = 1;
+	if (*p == '+')
+		p++;
+	else if (*p == '-') {
+		sign = -1;
+		p++;
+	}
+	if (*p < '0' || *p > '9')
+		fail("TZ string: %s has no digits", what);
+	long v[3] = { 0, 0, 0 };
+	for (int f = 0; f < 3; f++) {
+		int d = 0;
+		while (*p >= '0' && *p <= '9') {
+			if (++d > 3)
+				fail("TZ string: %s field too long", what);
+			v[f] = v[f] * 10 + (*p++ - '0');
+		}
+		if (d == 0)
+			fail("TZ string: %s has an empty field", what);
+		if (f == 2 || *p != ':')
+			break;
+		p++;
+	}
+	if (v[0] > maxhour || v[1] > 59 || v[2] > 59)
+		fail("TZ string: %s %ld:%ld:%ld out of range", what,
+		     v[0], v[1], v[2]);
+	*s = p;
+	return (int32_t)(sign * (v[0] * 3600 + v[1] * 60 + v[2]));
+}
+
+static long pf_num(const char **s, long lo, long hi, const char *what)
+{
+	const char *p = *s;
+	if (*p < '0' || *p > '9')
+		fail("TZ string: %s is not a number", what);
+	long v = 0;
+	int d = 0;
+	while (*p >= '0' && *p <= '9') {
+		if (++d > 3)
+			fail("TZ string: %s too long", what);
+		v = v * 10 + (*p++ - '0');
+	}
+	if (v < lo || v > hi)
+		fail("TZ string: %s %ld not in %ld..%ld", what, v, lo, hi);
+	*s = p;
+	return v;
+}
+
+static void pf_rule(const char **s, Prule *r, const char *what)
+{
+	const char *p = *s;
+	memset(r, 0, sizeof *r);
+	if (*p == 'M') {
+		p++;
+		r->kind = 'M';
+		r->mon = (int)pf_num(&p, 1, 12, "rule month");
+		if (*p++ != '.')
+			fail("TZ string: %s rule wants M<m>.<w>.<d>", what);
+		r->week = (int)pf_num(&p, 1, 5, "rule week");
+		if (*p++ != '.')
+			fail("TZ string: %s rule wants M<m>.<w>.<d>", what);
+		r->dow = (int)pf_num(&p, 0, 6, "rule day of week");
+	} else if (*p == 'J') {
+		p++;
+		r->kind = 'J';
+		r->n = (int)pf_num(&p, 1, 365, "Julian day");
+	} else {
+		r->kind = 'D';
+		r->n = (int)pf_num(&p, 0, 365, "day of year");
+	}
+	r->time = 2 * 3600;		/* POSIX default */
+	if (*p == '/') {
+		p++;
+		/* v3 widens this to -167..167 hours. Version 2 files in this
+		 * corpus do use /0, /1, /3 and /24; the 8 version 3 files are
+		 * the ones that need the extremes. */
+		r->time = pf_hms(&p, 167, "rule time");
+	}
+	*s = p;
+}
+
+static void footer_parse(Tz *z)
+{
+	Ptz *o = &z->p;
+	memset(o, 0, sizeof *o);
+	if (!z->v2 || z->footerlen == 0)
+		return;
+	/* The footer is not NUL-terminated in the file, so copy it out before
+	 * handing it to a parser that walks on a terminator. */
+	if (z->footerlen >= 128)
+		fail("TZ string is %zu bytes, refusing", z->footerlen);
+	char buf[128];
+	memcpy(buf, z->footer, z->footerlen);
+	buf[z->footerlen] = '\0';
+	const char *p = buf;
+
+	pf_abbr(&p, o->std, "std");
+	/* POSIX sign convention is inverted: "EST5" is five hours *west*. */
+	o->stdoff = -pf_hms(&p, 24, "std offset");
+	o->dstoff = o->stdoff;
+	if (*p && *p != ',') {
+		pf_abbr(&p, o->dst, "dst");
+		o->has_dst = 1;
+		o->dstoff = o->stdoff + 3600;	/* POSIX default */
+		if (*p && *p != ',')
+			o->dstoff = -pf_hms(&p, 24, "dst offset");
+	}
+	if (o->has_dst) {
+		if (*p != ',')
+			fail("TZ string: DST named but no transition rules");
+		p++;
+		pf_rule(&p, &o->start, "start");
+		if (*p++ != ',')
+			fail("TZ string: only one transition rule");
+		pf_rule(&p, &o->end, "end");
+	}
+	if (*p)
+		fail("TZ string: trailing garbage at \"%s\"", p);
+	o->present = 1;
+}
+
+/* The UTC instant at which a rule fires in local year y, given the offset in
+ * effect immediately before it. */
+static int64_t rule_utc(const Prule *r, int64_t y, int32_t before)
+{
+	static const int mlen[13] =
+		{ 0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
+	int64_t day;
+
+	if (r->kind == 'M') {
+		int64_t first = days_from_civil(y, r->mon, 1);
+		/* 1970-01-01 was a Thursday, so day 0 has dow 4. */
+		int fdow = (int)(((first % 7) + 7 + 4) % 7);
+		int dim = mlen[r->mon];
+		if (r->mon == 2 &&
+		    ((y % 4 == 0 && y % 100 != 0) || y % 400 == 0))
+			dim = 29;
+		int dom = 1 + (r->dow - fdow + 7) % 7 + (r->week - 1) * 7;
+		/* Week 5 means "the last one", which in a short month is the
+		 * fourth. Clamping instead of this is the classic off-by-a-week
+		 * in October rules. */
+		while (dom > dim)
+			dom -= 7;
+		day = first + dom - 1;
+	} else if (r->kind == 'J') {
+		int leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+		/* Jn never names February 29, so after day 59 everything in a
+		 * leap year slides by one. */
+		day = days_from_civil(y, 1, 1) + r->n - 1 +
+		      (leap && r->n >= 60 ? 1 : 0);
+	} else {
+		day = days_from_civil(y, 1, 1) + r->n;
+	}
+	return day * 86400 + r->time - before;
+}
+
+/* The two rule firings for local year y, as UTC instants paired with the isdst
+ * they establish. Sorted, so a southern-hemisphere zone whose DST starts in
+ * October and ends in April needs no special case. */
+typedef struct {
+	int64_t t;
+	int isdst;
+} Ev;
+
+static void year_events(const Ptz *o, int64_t y, Ev ev[2])
+{
+	int64_t a = rule_utc(&o->start, y, o->stdoff);
+	int64_t b = rule_utc(&o->end, y, o->dstoff);
+	/* On a tie the start wins, which is what Python's zoneinfo computes
+	 * for a rule pair that never actually fires. No zone in tzdb has one. */
+	if (b <= a) {
+		ev[0].t = b; ev[0].isdst = 0;
+		ev[1].t = a; ev[1].isdst = 1;
+	} else {
+		ev[0].t = a; ev[0].isdst = 1;
+		ev[1].t = b; ev[1].isdst = 0;
+	}
+}
+
+/* Is DST in effect at UTC instant t, by the footer rules?
+ *
+ * Four years of firings are generated rather than one, because a v3 rule time
+ * of 167 hours moves a firing a week out of its own year, and because the
+ * answer for January depends on the rule that fired the previous autumn.
+ * Taking the latest firing at or before t -- rather than testing t against one
+ * year's start/end pair -- is what makes a southern-hemisphere zone, whose DST
+ * window straddles New Year, need no special case. */
+static int footer_isdst(const Ptz *o, int64_t t)
+{
+	int64_t y;
+	int m, d;
+	civil_from_days(fdiv(t, 86400), &y, &m, &d);
+	/* days_from_civil(y) * 86400 overflows int64 beyond this, and UBSan is
+	 * on in the test build. Refused rather than wrapped: neither oracle can
+	 * answer here either (zdump stops at year 2500, Python at 9999), so a
+	 * number produced for year 3e11 would be checked by nothing.
+	 * shortcut: a hard year bound. Ceiling: -a on a timestamp past year
+	 * 1000000 is an error, not an answer. Upgrade path: evaluate the rules
+	 * in __int128, or reduce t modulo 400 years first, as tzcode does. */
+	if (y < -1000000 || y > 1000000)
+		fail("timestamp %lld is in year %lld, outside the range where "
+		     "the TZ footer can be evaluated", (long long)t,
+		     (long long)y);
+
+	int64_t best = INT64_MIN, firstt = INT64_MAX;
+	int bestdst = 0, firstdst = 0;
+	for (int64_t yy = y - 2; yy <= y + 1; yy++) {
+		Ev ev[2];
+		year_events(o, yy, ev);
+		for (int i = 0; i < 2; i++) {
+			if (ev[i].t < firstt) {
+				firstt = ev[i].t;
+				firstdst = ev[i].isdst;
+			}
+			if (ev[i].t <= t && ev[i].t >= best) {
+				best = ev[i].t;
+				bestdst = ev[i].isdst;
+			}
+		}
+	}
+	/* t precedes every firing in the window: the state is whatever the
+	 * earliest one replaced. Unreachable with a four-year window, kept
+	 * because "unreachable" is a claim about arithmetic, not a fact. */
+	return best == INT64_MIN ? !firstdst : bestdst;
+}
+
+typedef struct {
+	int32_t utoff;
+	const char *ab;
+	int isdst;
+	const char *src;	/* "file" for an explicit transition, "tz" for
+				 * a footer rule */
+} State;
+
+static State footer_state(const Ptz *o, int64_t t)
+{
+	State s;
+	if (o->has_dst && footer_isdst(o, t)) {
+		s.utoff = o->dstoff;
+		s.ab = o->dst;
+		s.isdst = 1;
+	} else {
+		s.utoff = o->stdoff;
+		s.ab = o->std;
+		s.isdst = 0;
+	}
+	s.src = "tz";
+	return s;
+}
+
 /* ------------------------------------------------------------------ output */
 
 static const char *abbr_of(const Tz *z, int ti)
@@ -441,13 +777,44 @@ static const char *abbr_of(const Tz *z, int ti)
 	return z->chars + z->tt[ti].idx;
 }
 
-static void print_state(int64_t t, int32_t utoff, const char *ab, int isdst,
-			const char *src)
+/* The local time type in effect at UTC instant t, by binary search over the
+ * explicit transition table. Before the first transition the file does not say
+ * what applies, so deftype does. */
+static int type_at(const Tz *z, int64_t t)
 {
-	char iso[40];
+	if (z->c.timecnt == 0 || t < z->times[0])
+		return z->deftype;
+	uint32_t lo = 0, hi = z->c.timecnt - 1;
+	while (lo < hi) {			/* last i with times[i] <= t */
+		uint32_t mid = lo + (hi - lo + 1) / 2;
+		if (z->times[mid] <= t)
+			lo = mid;
+		else
+			hi = mid - 1;
+	}
+	return z->tidx[lo];
+}
+
+/* The whole answer: explicit transitions where the file has them, the TZ
+ * footer past the last one. A reader that only does the first half is wrong
+ * about every DST zone from 2038 onward and says nothing about it; a reader
+ * that only does the second half is wrong about all of history. */
+static State state_at(const Tz *z, int64_t t)
+{
+	if (z->p.present &&
+	    (z->c.timecnt == 0 || t > z->times[z->c.timecnt - 1]))
+		return footer_state(&z->p, t);
+	int ti = type_at(z, t);
+	State s = { z->tt[ti].utoff, abbr_of(z, ti), z->tt[ti].isdst, "file" };
+	return s;
+}
+
+static void print_state(int64_t t, State s)
+{
+	char iso[48];
 	iso_utc(t, iso, sizeof iso);
-	printf("%lld %s %d %s %d %s\n", (long long)t, iso, (int)utoff, ab,
-	       isdst, src);
+	printf("%lld %s %d %s %d %s\n", (long long)t, iso, (int)s.utoff, s.ab,
+	       s.isdst, s.src);
 }
 
 static void cmd_info(const Tz *z, const char *path)
@@ -469,57 +836,72 @@ static void cmd_info(const Tz *z, const char *path)
 	else
 		printf("footer -\n");
 	printf("default_type %d\n", z->deftype);
-}
-
-/* The local time type in effect at UTC instant t, by binary search over the
- * transition table. Returns a type index.
- *
- * Before the first transition the file does not say what applies, so deftype
- * does; at or after the last one, the explicit table has run out and the TZ
- * footer governs, which is handled by the caller. */
-static int type_at(const Tz *z, int64_t t)
-{
-	if (z->c.timecnt == 0 || t < z->times[0])
-		return z->deftype;
-	uint32_t lo = 0, hi = z->c.timecnt - 1;
-	while (lo < hi) {			/* last i with times[i] <= t */
-		uint32_t mid = lo + (hi - lo + 1) / 2;
-		if (z->times[mid] <= t)
-			lo = mid;
-		else
-			hi = mid - 1;
-	}
-	return z->tidx[lo];
+	printf("tz_dst %d\n", z->p.present ? z->p.has_dst : -1);
 }
 
 static void cmd_at(const Tz *z, int64_t t)
 {
-	int ti = type_at(z, t);
-	print_state(t, z->tt[ti].utoff, abbr_of(z, ti), z->tt[ti].isdst,
-		    "file");
+	print_state(t, state_at(z, t));
 }
 
-static void cmd_list(const Tz *z)
+/* shortcut: a fixed ceiling on how far -l will expand the footer. Ceiling:
+ * `tzf -l FILE UNTIL` refuses an UNTIL more than 20000 years past the last
+ * explicit transition. Upgrade path: none wanted -- a caller who needs year
+ * 30000 has a different problem. */
+#define MAX_EXPAND_YEARS 20000
+
+/* Every explicit transition, then -- when UNTIL is given -- every footer
+ * firing up to and including it.
+ *
+ * Firings that leave the offset, abbreviation and isdst unchanged are still
+ * printed: they are facts about the rules. zdump cannot see them, because it
+ * finds transitions by looking for a change in what localtime() reports, so
+ * the harness drops them from both sides and says so. */
+static void cmd_list(const Tz *z, int have_until, int64_t until)
 {
 	printf("# block=%s timecnt=%u typecnt=%u\n", z->v2 ? "v2" : "v1",
 	       z->c.timecnt, z->c.typecnt);
 	for (uint32_t i = 0; i < z->c.timecnt; i++) {
 		int ti = z->tidx[i];
-		print_state(z->times[i], z->tt[ti].utoff, abbr_of(z, ti),
-			    z->tt[ti].isdst, "file");
+		State s = { z->tt[ti].utoff, abbr_of(z, ti), z->tt[ti].isdst,
+			    "file" };
+		print_state(z->times[i], s);
+	}
+	if (!have_until || !z->p.present || !z->p.has_dst)
+		return;
+
+	int64_t lo = z->c.timecnt ? z->times[z->c.timecnt - 1] : 0;
+	if (until <= lo)
+		return;
+	int64_t y0, y1;
+	int m, d;
+	civil_from_days(fdiv(lo, 86400), &y0, &m, &d);
+	civil_from_days(fdiv(until, 86400), &y1, &m, &d);
+	if (y1 - y0 > MAX_EXPAND_YEARS)
+		fail("UNTIL is %lld years past the last transition; the cap "
+		     "is %d", (long long)(y1 - y0), MAX_EXPAND_YEARS);
+	for (int64_t y = y0; y <= y1 + 1; y++) {
+		Ev ev[2];
+		year_events(&z->p, y, ev);
+		for (int i = 0; i < 2; i++) {
+			if (ev[i].t <= lo || ev[i].t > until)
+				continue;
+			print_state(ev[i].t, footer_state(&z->p, ev[i].t));
+		}
 	}
 }
 
 /* -------------------------------------------------------------------- main */
 
 static const char usage[] =
-	"usage: tzf -l FILE        list the explicit transitions\n"
-	"       tzf -a FILE TS...  the offset in effect at each instant\n"
-	"       tzf -i FILE        header facts\n"
-	"TS is an integer count of seconds since 1970-01-01T00:00:00Z.\n";
+	"usage: tzf -l FILE [UNTIL]  list the transitions\n"
+	"       tzf -a FILE TS...    the offset in effect at each instant\n"
+	"       tzf -i FILE          header facts\n"
+	"UNTIL and TS are integer counts of seconds since the epoch. With\n"
+	"UNTIL, -l also lists the TZ footer firings up to that instant.\n";
 
-/* Refuses trailing junk. A timestamp that silently becomes 0 because of a
- * typo would make every comparison against it agree about the wrong instant. */
+/* Refuses trailing junk. A timestamp that silently became 0 because of a typo
+ * would make every comparison against it agree about the wrong instant. */
 static int64_t parse_ts(const char *s)
 {
 	char *end;
@@ -540,16 +922,20 @@ int main(int argc, char **argv)
 	}
 	const char *mode = argv[1];
 	const char *path = argv[2];
-	int at = !strcmp(mode, "-a");
-	if ((strcmp(mode, "-l") && strcmp(mode, "-i") && !at) ||
-	    (!at && argc > 3) || (at && argc < 4)) {
+	int at = !strcmp(mode, "-a"), list = !strcmp(mode, "-l");
+	if ((!at && !list && strcmp(mode, "-i")) || (at && argc < 4) ||
+	    (!at && !list && argc > 3) || (list && argc > 4)) {
 		fputs(usage, stderr);
 		return EX_USAGE;
 	}
-	/* Timestamps are parsed before the file is opened so a typo is a usage
-	 * error rather than a diagnostic about the file. */
+	/* Timestamps are parsed before the file is opened, so a typo is a
+	 * usage error rather than a diagnostic about the file. */
 	int64_t *ts = NULL;
-	int nts = argc - 3;
+	int nts = at ? argc - 3 : 0;
+	int64_t until = 0;
+	int have_until = list && argc == 4;
+	if (have_until)
+		until = parse_ts(argv[3]);
 	if (at) {
 		ts = calloc((size_t)nts, sizeof *ts);
 		if (!ts)
@@ -563,11 +949,16 @@ int main(int argc, char **argv)
 	Tz z;
 	memset(&z, 0, sizeof z);
 	tz_read(&z, buf, len);
+	/* Said once, to stderr, rather than silently folded into the offsets.
+	 * No file under /usr/share/zoneinfo on this machine carries any. */
+	if (z.c.leapcnt)
+		fprintf(stderr, "%s: %s: %u leap-second records ignored\n",
+			prog, path, z.c.leapcnt);
 
 	if (!strcmp(mode, "-i"))
 		cmd_info(&z, path);
-	else if (!strcmp(mode, "-l"))
-		cmd_list(&z);
+	else if (list)
+		cmd_list(&z, have_until, until);
 	else
 		for (int i = 0; i < nts; i++)
 			cmd_at(&z, ts[i]);
