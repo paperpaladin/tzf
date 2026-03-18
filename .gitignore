@@ -2,3 +2,4 @@ tzf
 tzf-asan
 t/tmp/
 *.o
+t/__pycache__/
