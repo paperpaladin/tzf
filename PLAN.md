@@ -81,7 +81,7 @@ Ranked, by how little of it we control:
    ones, which is why the robustness half of the suite asserts tzf's own exit
    status instead of comparing: `zdump` has no way to report a bad file at all.
    See the README.
-3. **The corpus itself.** 436 files, versions 2 and 3, 30845 explicit
+3. **The corpus itself.** 436 files, versions 2 and 3, 26175 explicit
    transitions, 93 distinct TZ footers including the five that need the version
    3 extensions. Real-world data nobody here authored.
 4. **The mutation sweep.** Named corruptions of a real file -- a count that
