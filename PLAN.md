@@ -38,7 +38,7 @@ no output line ever mixes a `file` fact with a `tz` extrapolation.
 ## Hard invariant
 
 **Every instant we answer about agrees with both `zdump` and Python's
-`zoneinfo`, and malformed input is refused rather than crashed on.**
+`zoneinfo`, and malformed input is refused, not crashed on.**
 
 Concretely, and checked by `make test`:
 
@@ -46,15 +46,15 @@ Concretely, and checked by `make test`:
   instants and the (offset, abbreviation, isdst) at each of them is *identical*
   to the list extracted from `zdump -v`, over a window from before the earliest
   transition in tzdb to 2100-01-01. Not similar, identical.
-- At ~180000 chosen instants -- three around every transition either
-  implementation reports, plus a grid through the TZ-footer era --
+- At ~180000 chosen instants, three around every transition either
+  implementation reports, plus a grid through the TZ-footer era:
   `utcoffset()`, `tzname()` and `dst()` from Python's `zoneinfo` agree, and so
   does `datetime`'s rendering of the UTC instant.
 - The same two comparisons pass over a manufactured version 1 corpus, because
   no version 1 file exists on this machine and a reader that handles only the
   64-bit block is otherwise indistinguishable from a correct one.
-- No input -- truncated, byte-corrupted, non-TZif, a directory, a count that
-  overflows, an index outside its table -- makes tzf exit above 1, which means
+- No input, truncated, byte-corrupted, non-TZif, a directory, a count that
+  overflows, an index outside its table, makes tzf exit above 1, which means
   no SIGSEGV, no SIGABRT, no timeout, and no sanitizer report. Verified over
   47 named mutants and ~370 swept ones per run, and again under
   `-fsanitize=address,undefined`. An overflowing count must also be refused by
@@ -67,38 +67,38 @@ Concretely, and checked by `make test`:
 
 Ranked, by how little of it we control:
 
-1. **`zdump -v` from glibc** (`/usr/bin/zdump`, glibc 2.41), run over all 436
+1. `zdump -v` from glibc (`/usr/bin/zdump`, glibc 2.41), run over all 436
    real TZif files on this machine. A C implementation of the same RFC written
-   by other people and shipped to every Linux user; where we disagree, we are
-   wrong. Facts are extracted from its text and compared as lists -- its output
+   by other people and shipped to every Linux user. Where we disagree, we are
+   wrong. Facts are extracted from its text and compared as lists: its output
    format and ours have nothing in common and diffing them would measure
    rendering.
-2. **Python's `zoneinfo`** (CPython 3.13 stdlib), reading the same bytes in a
+2. Python's `zoneinfo` (CPython 3.13 stdlib), reading the same bytes in a
    different language with an independent lineage. Agreeing with both is a much
    stronger claim than agreeing with either. Asked directly whether they ever
-   disagree with *each other* -- 436 zones, 473115 instants, tzf not involved
-   -- they never did about a valid file. They disagree sharply about malformed
+   disagree with *each other*: 436 zones, 473115 instants, tzf not involved,
+   they never did about a valid file. They disagree sharply about malformed
    ones, which is why the robustness half of the suite asserts tzf's own exit
    status instead of comparing: `zdump` has no way to report a bad file at all.
    See the README.
-3. **The corpus itself.** 436 files, versions 2 and 3, 26175 explicit
+3. The corpus itself. 436 files, versions 2 and 3, 26175 explicit
    transitions, 93 distinct TZ footers including the five that need the version
    3 extensions. Real-world data nobody here authored.
-4. **The mutation sweep.** Named corruptions of a real file -- a count that
+4. The mutation sweep. Named corruptions of a real file: a count that
    overflows 32-bit arithmetic, an index one past its table, unsorted
-   transition times, a footer with no closing newline -- plus truncation at
+   transition times, a footer with no closing newline, plus truncation at
    every stride and three-byte corruption at every stride. Each sweep asserts
    it is non-vacuous as well as non-fatal.
-5. **ASan + UBSan** (`make test-asan`) over the whole suite, with
+5. ASan + UBSan (`make test-asan`) over the whole suite, with
    `exitcode=86` so a sanitizer report cannot be mistaken for our own exit 1.
-6. **Deliberate defects in tzf itself**, 22 of them, each expected to turn a
+6. Deliberate defects in tzf itself, 22 of them, each expected to turn a
    *named* assertion red. Recorded in the README, survivors included.
 
 ## Non-goals
 
-- **Leap seconds.** Parsed to find what follows them, then ignored, with one
+- Leap seconds. Parsed to find what follows them, then ignored, with one
   line to stderr. There is no `right/` subdirectory on this machine, every
-  file has `leapcnt` 0, and `zic` is not installed to build one -- so there is
+  file has `leapcnt` 0, and `zic` is not installed to build one, so there is
   no oracle, and claiming support for something no authority checks is the
   thing this tree exists not to do.
 - Writing TZif files, or `zic`'s source format.
@@ -108,9 +108,9 @@ Ranked, by how little of it we control:
 - `TZ=` environment variable handling, `tzset`, zone name lookup, or anything
   resembling `localtime`. tzf takes a path.
 - The `TZif` version 4 extensions to the leap-second table. The version byte
-  is accepted and the layout is identical; the leap records are skipped
+  is accepted and the layout is identical. The leap records are skipped
   either way.
-- Rendering local civil time. `zdump` prints both sides; tzf prints the UTC
+- Rendering local civil time. `zdump` prints both sides. Tzf prints the UTC
   instant and the offset, and leaves the addition to the reader.
 - Being a library.
 
@@ -124,7 +124,7 @@ Ranked, by how little of it we control:
       and their products are not.
 - [x] `-a`: the type in effect at an instant, by binary search
       why: the lookup is the thing the format exists for, and it needs the
-      before-first-transition rule written down rather than left implicit.
+      before-first-transition rule written down.
 - [x] The TZ string footer
       why: without it, every instant after 2037 in a DST zone is either
       wrong or excluded from the comparison, and 118 zones are in that
@@ -134,18 +134,18 @@ Ranked, by how little of it we control:
       that standard is how timezone readers stay quietly wrong for a decade.
       Found two bugs, both in the harness.
 - [x] The mutation sweep, then README, then this file
-      why: written last so the limitations list is observed rather than
-      guessed at, and so every survivor is recorded as a survivor.
+      why: written last so the limitations list is observed,
+      not guessed at, and so every survivor is recorded as a survivor.
       done: 22 planted defects, 21 caught by a named assertion. One survivor
-      was a real gap -- a 32-bit block length -- and is now caught by a new
+      was a real gap: a 32-bit block length, and is now caught by a new
       assertion about which check did the refusing. One is provably
       equivalent on this corpus and is documented as a survivor.
 
-### Milestone 1 -- facts we print but do not check
+### Milestone 1: facts we print but do not check
 
 - [ ] Compare the `isstd`/`isut` indicator arrays against something
       why: they are read and skipped. They matter only for `zic`'s own
-      round-trip, which is why nothing here looks at them -- but "we skip
+      round-trip, which is why nothing here looks at them, but "we skip
       the right number of bytes" is currently proved only by the fact that
       the footer parses afterwards.
 - [ ] Compare `-i`'s header counts against an independent reader
@@ -158,7 +158,7 @@ Ranked, by how little of it we control:
       nothing in the suite proves that by watching a planted overflow get
       caught. It was proved by hand once; by hand does not stay proved.
 
-### Milestone 2 -- corpora we do not have
+### Milestone 2: corpora we do not have
 
 - [ ] A leap-second corpus
       why: `leapcnt` is the one field read and never exercised. Building one
@@ -171,10 +171,10 @@ Ranked, by how little of it we control:
       same trick the manufactured v1 corpus uses.
 - [ ] A big-endian host
       why: every multi-byte read goes through `be32`/`be64`, so this should
-      be a no-op -- and "should be a no-op" is the sentence that precedes
+      be a no-op, and "should be a no-op" is the sentence that precedes
       every byte-order bug.
 
-### Milestone 3 -- the other direction
+### Milestone 3: the other direction
 
 - [ ] Local time to UTC, with the fold/gap rules
       why: it is the half of a timezone library that applications actually
