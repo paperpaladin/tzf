@@ -445,7 +445,7 @@ years a TZif file can legally contain, and the harness compares the rendered
 instant as well as the number.
 
 The footer. A hand-written POSIX TZ parser, and a rule engine that
-generates the two firings for a local year. Rather than testing an instant
+generates the two firings for a local year. Instead of testing an instant
 against one year's start/end pair, `-a` generates four years of firings around
 it and takes the latest at or before it. That makes a southern-hemisphere zone,
 whose DST window straddles New Year, need no special case; four years and not
