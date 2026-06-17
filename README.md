@@ -152,7 +152,7 @@ ok   an out-of-range instant is refused rather than answered
 
 `make test-asan` reruns all 34 under `-fsanitize=address,undefined` with leak
 detection on (also clean). `ASAN_OPTIONS=exitcode=86` is load-bearing there:
-ASan's default exit status on a report is 1, which is also tzf's "this file is
+ASan's default exit status on a report is 1, also tzf's "this file is
 malformed" status, and most of this suite's length is spent asserting exactly
 that, so without it the target silently could not fail and a heap overflow
 would score as a correct diagnostic.
@@ -186,8 +186,8 @@ is no leap-second corpus and no second corpus to keep separate.
 The version 1 gap mattered, because a reader that handles only the 64-bit block
 is indistinguishable from a correct one until it meets a file that has none. So
 the suite manufactures 51 version 1 files by keeping a real file's v1 block and
-setting the version byte to NUL. Both oracles read those, which is what makes
-them a corpus, not a fixture: 28 of the 51 differ from their v2+ parent,
+setting the version byte to NUL. Both oracles read those, and that is what makes
+them a corpus rather than a fixture: 28 of the 51 differ from their v2+ parent,
 and that count is asserted.
 
 The version 3 files are not decoration. Their footers are where the format's
@@ -214,8 +214,8 @@ flag every single time. There is no zone to report a split on, which is worth
 saying explicitly: the claim "we agree with both" is not weakened by the two of
 them quietly differing somewhere.
 
-They disagree sharply about invalid files, which is why the robustness half
-of the suite asserts tzf's own exit status instead of comparing. Taking one
+They disagree sharply about invalid files, so the robustness half of the
+suite asserts tzf's own exit status instead of comparing. Taking one
 real file (`America/New_York`) and changing it in 32 named ways, each in the
 block the reader actually uses:
 
@@ -278,7 +278,7 @@ discovery:
 
 Each of those is one `if` and a message. The upgrade path, if any of it ever
 needs relaxing, is to downgrade the `fail()` to a warning on stderr and carry
-on, which is what glibc effectively does.
+on, as glibc effectively does.
 
 ### One transition in tzdb is invisible to zdump, and it is normalised away
 
@@ -287,8 +287,8 @@ so a transition to a local time type indistinguishable from the current one is
 something it cannot see. `tzf -l` prints them, because they are facts about the
 file.
 
-Exactly one exists in the whole corpus, in `Asia/Tbilisi`, which is why
-this normalisation cannot be waved through as harmless: the harness drops
+Exactly one exists in the whole corpus, in `Asia/Tbilisi`, and that is why this
+normalisation cannot be waved through as harmless: the harness drops
 no-change transitions from tzf's side before comparing, visibly, in one
 function, and that function alters the comparison for one zone out of 436.
 
@@ -424,8 +424,8 @@ One file, ~970 lines, four layers, each depending only on the one below.
 The cursor (`Rd`). A buffer, a length, a position, a sticky error flag.
 Every read of the file goes through it and `rd_take` is the only thing in the
 program that turns an offset into a pointer. The flag is sticky so a caller can
-decode a whole structure and check once at the end, which is what keeps the
-error paths short enough to be right. That single chokepoint is why ~370
+decode a whole structure and check once at the end, and that keeps the error
+paths short enough to be right. That single chokepoint is why ~370
 mutants per run produce diagnostics instead of segfaults.
 
 The whole file is read into one `malloc` buffer, not `mmap`ed,
