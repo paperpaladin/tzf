@@ -78,7 +78,7 @@ Ranked, by how little of it we control:
    stronger claim than agreeing with either. Asked directly whether they ever
    disagree with *each other*: 436 zones, 473115 instants, tzf not involved,
    they never did about a valid file. They disagree sharply about malformed
-   ones, which is why the robustness half of the suite asserts tzf's own exit
+   ones, so the robustness half of the suite asserts tzf's own exit
    status instead of comparing: `zdump` has no way to report a bad file at all.
    See the README.
 3. The corpus itself. 436 files, versions 2 and 3, 26175 explicit
@@ -145,7 +145,7 @@ Ranked, by how little of it we control:
 
 - [ ] Compare the `isstd`/`isut` indicator arrays against something
       why: they are read and skipped. They matter only for `zic`'s own
-      round-trip, which is why nothing here looks at them, but "we skip
+      round-trip, so nothing here looks at them, but "we skip
       the right number of bytes" is currently proved only by the fact that
       the footer parses afterwards.
 - [ ] Compare `-i`'s header counts against an independent reader
@@ -153,7 +153,7 @@ Ranked, by how little of it we control:
       `isutcnt`/`isstdcnt` pair would pass everything today, because the two
       are equal in every file in tzdb.
 - [ ] Assert the ASan target can fail, inside the suite
-      why: `test-asan` is green, which is exactly how `inflate`'s ASan target
+      why: `test-asan` is green, exactly how `inflate`'s ASan target
       looked while it could not fail. The exit-code collision is handled, but
       nothing in the suite proves that by watching a planted overflow get
       caught. It was proved by hand once; by hand does not stay proved.
@@ -162,12 +162,12 @@ Ranked, by how little of it we control:
 
 - [ ] A leap-second corpus
       why: `leapcnt` is the one field read and never exercised. Building one
-      needs `zic -L`, which is not installed; a hand-built file would have no
+      needs `zic -L`, not installed here; a hand-built file would have no
       oracle, which is worse than the gap.
 - [ ] `Jn` and bare-`n` footer rules
       why: all 93 footers in tzdb use the `Mm.w.d` form, so two thirds of the
       rule parser has never run against an authority. A synthetic footer
-      spliced into a real file would be read by both oracles, which is the
+      spliced into a real file would be read by both oracles, the
       same trick the manufactured v1 corpus uses.
 - [ ] A big-endian host
       why: every multi-byte read goes through `be32`/`be64`, so this should
