@@ -49,7 +49,7 @@ error.
 ## Why this exists
 
 Timezone data is the thing every timestamp on a computer eventually depends on,
-and almost nobody has read the bytes: it is consumed through `localtime`,
+and almost nobody has read the bytes. It is consumed through `localtime`,
 `java.time` or `datetime`, three layers above the file. Writing the reader is
 the only way to find out which parts are genuinely hard. The answer is not the
 binary layout, which is six counts and four arrays. It is the two places where
@@ -211,7 +211,7 @@ two of the five.
 Asked directly: 436 zones, 473115 instants, tzf not involved at all:
 `zdump` and `zoneinfo` agreed about the offset, the abbreviation and the DST
 flag every single time. There is no zone to report a split on, which is worth
-saying explicitly: the claim "we agree with both" is not weakened by the two of
+saying explicitly. The claim "we agree with both" is not weakened by the two of
 them quietly differing somewhere.
 
 They disagree sharply about invalid files, so the robustness half of the
@@ -345,7 +345,7 @@ red:
 
 One survivor was a real gap. Computing the block length in 32-bit
 arithmetic instead of `uint64_t` passed all 33 assertions. The obvious overflow
-mutant: `timecnt` = `0xffffffff`, turned out to be the useless one: it
+mutant: `timecnt` = `0xffffffff`, turned out to be the useless one. It
 wraps to another huge number and fails a bounds check anyway. The block costs
 `tw + 1` bytes per transition, so the value that actually wraps to something
 *small* is `954437177`, because `954437177 * 9` is `2**33 + 1`. With that, a
@@ -361,7 +361,7 @@ One survivor is provably equivalent. Replacing the
 "first non-DST local time type, else the type the first transition names" rule
 with a flat `0` changes nothing, because all 436 files in tzdb report
 `default_type 0`, checked directly, zone by zone. The rule is kept and
-printed by `-i` anyway: it costs four lines, and a file whose type 0 is the DST
+printed by `-i` anyway. It costs four lines, and a file whose type 0 is the DST
 half of a pair is legal and would be answered wrongly.
 
 ## What does not work
