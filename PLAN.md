@@ -143,11 +143,33 @@ Ranked, by how little of it we control:
 
 ### Milestone 1: facts we print but do not check
 
-- [ ] Compare the `isstd`/`isut` indicator arrays against something
+- [x] Compare the `isstd`/`isut` indicator arrays against something
       why: they are read and skipped. They matter only for `zic`'s own
       round-trip, so nothing here looks at them, but "we skip
       the right number of bytes" is currently proved only by the fact that
       the footer parses afterwards.
+      done: `-i` keeps and prints both arrays, and `t/indicators.py`
+      parses the same bytes independently from RFC 8536 section 3.
+      436 files, 209 with the arrays present and 209 with a set bit,
+      0 disagree.
+      zic would be the better oracle, being the thing that WRITES
+      them, and it is not installed here; zdump does not show them at
+      all. So this is a second parse rather than a second source, and
+      it is weaker in a way the README states.
+      Two vacuity guards, because this comparison has two ways of
+      proving nothing: 248 of the 487 files have no indicator arrays
+      at all, so without a floor most of the agreement would be
+      [] == [], and a reader returning zeros would pass unless some
+      file has a set bit. Both are asserted.
+      Two mutations, both caught: the arrays read one byte early, and
+      isstd and isut swapped. The second needs a file where the two
+      differ, and 64 of the 173 files that have both are like that.
+      Harness bug, mine: the failure path called `no`, which is not a
+      function in this suite. The shell complained on stderr,
+      incremented nothing, and the run came back "34 passed, 0 failed"
+      with the assertion simply missing. A swapped-array mutant
+      appeared to survive because of it. A missing assertion looks
+      like a smaller number and nothing else.
 - [ ] Compare `-i`'s header counts against an independent reader
       why: the counts are printed and the suite never reads them. A swapped
       `isutcnt`/`isstdcnt` pair would pass everything today, because the two

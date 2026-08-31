@@ -161,6 +161,17 @@ typedef struct {
 	const char *chars;	/* charcnt bytes of NUL-terminated abbrevs */
 	Leap *leaps;
 
+	/* The two indicator arrays. Nothing here uses them: they exist so
+	 * that zic can reconstruct whether a rule's UNTIL was wall, standard
+	 * or UT time, which matters only when compiling back to source. They
+	 * were read and discarded, and "we skipped the right number of
+	 * bytes" was then proved only by the footer parsing afterwards,
+	 * which is a weak thing to rest on: two compensating offset errors
+	 * leave the footer exactly where it was. Kept and printed now, so
+	 * a second reader can disagree. */
+	const uint8_t *isstd;
+	const uint8_t *isut;
+
 	const char *footer;	/* TZ string, without the framing newlines */
 	size_t footerlen;
 	Ptz p;
@@ -320,8 +331,8 @@ static void block_read(Rd *r, Tz *z, const Counts *c, unsigned tw)
 		z->leaps[i].occur = tw == 8 ? rd_i64(r) : rd_i32(r);
 		z->leaps[i].corr = rd_i32(r);
 	}
-	rd_take(r, c->isstdcnt);
-	rd_take(r, c->isutcnt);
+	z->isstd = rd_take(r, c->isstdcnt);
+	z->isut = rd_take(r, c->isutcnt);
 	if (r->err)
 		fail("truncated data block");
 	z->c = *c;
@@ -830,6 +841,20 @@ static void cmd_info(const Tz *z, const char *path)
 		       "typecnt=%u charcnt=%u\n", z->c2.isutcnt,
 		       z->c2.isstdcnt, z->c2.leapcnt, z->c2.timecnt,
 		       z->c2.typecnt, z->c2.charcnt);
+	/* One line per array, values in order, so a reader that skipped
+	 * the right COUNT from the wrong PLACE is visible. An absent array
+	 * prints the count 0 and nothing else, which is a real state: RFC
+	 * 8536 allows isstdcnt and isutcnt to be zero, and 248 of the 487
+	 * files installed here have them that way. */
+	printf("isstd %u", z->c.isstdcnt);
+	for (uint32_t i = 0; i < z->c.isstdcnt; i++)
+		printf(" %u", z->isstd ? z->isstd[i] : 0u);
+	putchar('\n');
+	printf("isut %u", z->c.isutcnt);
+	for (uint32_t i = 0; i < z->c.isutcnt; i++)
+		printf(" %u", z->isut ? z->isut[i] : 0u);
+	putchar('\n');
+
 	if (z->v2)
 		printf("footer %.*s\n", (int)z->footerlen,
 		       z->footerlen ? z->footer : "");

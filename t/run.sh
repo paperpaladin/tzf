@@ -443,6 +443,36 @@ else
 	bad "tzf -a did not refuse an out-of-range instant"
 fi
 
+# ------------------------- the indicator arrays, against a second reader
+# isstd and isut are read and then ignored by everything here. They
+# exist so zic can reconstruct whether a rule's UNTIL was wall,
+# standard or UT time, and nothing about a timestamp depends on them.
+#
+# Which is why they needed checking. "We skipped the right number of
+# bytes" was proved only by the footer parsing afterwards, and two
+# compensating offset errors leave the footer exactly where it was.
+#
+# zic would be the better oracle, being what writes them, and it is
+# not installed here; zdump does not show them at all. So this is a
+# second parse of the same bytes written from RFC 8536, which is
+# weaker and says so.
+out=$(find "$ZONEDIR" -type f -print0 2>/dev/null |
+      xargs -0 python3 t/indicators.py ./tzf 2>&1)
+st=$?
+line=$(printf '%s' "$out" | tail -1)
+if [ "$st" -eq 0 ]; then
+	ok "$line"
+else
+	# `bad`, not `no`. The first version of this called a function
+	# that does not exist in this suite, so the failure path was an
+	# unknown command: the shell complained on stderr, incremented
+	# nothing, and the run came back "34 passed, 0 failed" with the
+	# line simply absent. A missing assertion looks like a smaller
+	# number and nothing else.
+	bad "$line"
+	printf '%s\n' "$out" | head -8 | sed 's/^/        /'
+fi
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
