@@ -147,7 +147,7 @@ ok   a directory, a text file, an empty file and a missing path all error cleanl
 ok   usage errors exit 2, distinct from malformed input's 1
 ok   an out-of-range instant is refused rather than answered
 
-34 passed, 0 failed
+35 passed, 0 failed
 ```
 
 `make test-asan` reruns all 34 under `-fsanitize=address,undefined` with leak
