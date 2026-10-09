@@ -15,6 +15,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 #define _POSIX_C_SOURCE 200809L
+#include <errno.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -470,6 +471,34 @@ static void cmd_info(const Tz *z, const char *path)
 	printf("default_type %d\n", z->deftype);
 }
 
+/* The local time type in effect at UTC instant t, by binary search over the
+ * transition table. Returns a type index.
+ *
+ * Before the first transition the file does not say what applies, so deftype
+ * does; at or after the last one, the explicit table has run out and the TZ
+ * footer governs, which is handled by the caller. */
+static int type_at(const Tz *z, int64_t t)
+{
+	if (z->c.timecnt == 0 || t < z->times[0])
+		return z->deftype;
+	uint32_t lo = 0, hi = z->c.timecnt - 1;
+	while (lo < hi) {			/* last i with times[i] <= t */
+		uint32_t mid = lo + (hi - lo + 1) / 2;
+		if (z->times[mid] <= t)
+			lo = mid;
+		else
+			hi = mid - 1;
+	}
+	return z->tidx[lo];
+}
+
+static void cmd_at(const Tz *z, int64_t t)
+{
+	int ti = type_at(z, t);
+	print_state(t, z->tt[ti].utoff, abbr_of(z, ti), z->tt[ti].isdst,
+		    "file");
+}
+
 static void cmd_list(const Tz *z)
 {
 	printf("# block=%s timecnt=%u typecnt=%u\n", z->v2 ? "v2" : "v1",
@@ -485,7 +514,23 @@ static void cmd_list(const Tz *z)
 
 static const char usage[] =
 	"usage: tzf -l FILE        list the explicit transitions\n"
-	"       tzf -i FILE        header facts\n";
+	"       tzf -a FILE TS...  the offset in effect at each instant\n"
+	"       tzf -i FILE        header facts\n"
+	"TS is an integer count of seconds since 1970-01-01T00:00:00Z.\n";
+
+/* Refuses trailing junk. A timestamp that silently becomes 0 because of a
+ * typo would make every comparison against it agree about the wrong instant. */
+static int64_t parse_ts(const char *s)
+{
+	char *end;
+	errno = 0;
+	long long v = strtoll(s, &end, 10);
+	if (end == s || *end || errno) {
+		fprintf(stderr, "%s: %s: not an integer timestamp\n", prog, s);
+		exit(EX_USAGE);
+	}
+	return v;
+}
 
 int main(int argc, char **argv)
 {
@@ -495,9 +540,22 @@ int main(int argc, char **argv)
 	}
 	const char *mode = argv[1];
 	const char *path = argv[2];
-	if ((strcmp(mode, "-l") && strcmp(mode, "-i")) || argc > 3) {
+	int at = !strcmp(mode, "-a");
+	if ((strcmp(mode, "-l") && strcmp(mode, "-i") && !at) ||
+	    (!at && argc > 3) || (at && argc < 4)) {
 		fputs(usage, stderr);
 		return EX_USAGE;
+	}
+	/* Timestamps are parsed before the file is opened so a typo is a usage
+	 * error rather than a diagnostic about the file. */
+	int64_t *ts = NULL;
+	int nts = argc - 3;
+	if (at) {
+		ts = calloc((size_t)nts, sizeof *ts);
+		if (!ts)
+			fail("out of memory");
+		for (int i = 0; i < nts; i++)
+			ts[i] = parse_ts(argv[3 + i]);
 	}
 
 	size_t len;
@@ -510,11 +568,15 @@ int main(int argc, char **argv)
 		cmd_info(&z, path);
 	else if (!strcmp(mode, "-l"))
 		cmd_list(&z);
+	else
+		for (int i = 0; i < nts; i++)
+			cmd_at(&z, ts[i]);
 
 	free(z.times);
 	free(z.tidx);
 	free(z.tt);
 	free(z.leaps);
+	free(ts);
 	free(buf);
 	return EX_OK;
 }
