@@ -123,10 +123,17 @@ elif which == "bad-magic":
 elif which == "bad-version":
     d[4] = ord("9")
 elif which == "timecnt-overflow":
-    # timecnt 0xffffffff times 8 bytes needs 34 bits. In 32-bit arithmetic it
-    # wraps to a small number that then sails through a bounds check against
-    # the file size. This is the mutant block_len()'s uint64_t exists for.
+    # timecnt 0xffffffff times 8 bytes needs 34 bits.
     sethdr([iu, isd, lc, 0xffffffff, ty, ch])
+elif which == "timecnt-wrap":
+    # 0xffffffff is the obvious overflow and also the useless one: it wraps to
+    # another huge number, which fails a bounds check anyway. These values are
+    # chosen so the block length wraps to something *small*: the block costs
+    # tw+1 bytes per transition, and 954437177 * 9 is 2**33 + 1, which is 1
+    # modulo 2**32. A reader computing the length in 32-bit arithmetic then
+    # passes its own bounds check and asks calloc for 7.6 GB on behalf of a
+    # 4 KB file. This is the mutant block_len()'s uint64_t exists for.
+    sethdr([iu, isd, lc, 954437177 if tw == 8 else 858993460, ty, ch])
 elif which == "leapcnt-overflow":
     sethdr([iu, isd, 0xffffffff, tc, ty, ch])
 elif which == "charcnt-overflow":
@@ -208,7 +215,7 @@ v2only="v2-magic v2-version-mismatch v2-missing footer-unframed
 	footer-garbage footer-dst-no-rules footer-one-rule footer-month-13
 	footer-week-9 footer-hour-200 footer-unterminated-angle"
 # Mutants aimed at a data block: applied to whichever one is in use.
-blockwise="timecnt-overflow leapcnt-overflow charcnt-overflow typecnt-zero
+blockwise="timecnt-overflow timecnt-wrap leapcnt-overflow charcnt-overflow typecnt-zero
 	charcnt-zero isutcnt-bogus timecnt-plus-one typeidx-oob abbrind-oob
 	abbr-unterminated times-unsorted utoff-reserved isdst-two"
 
@@ -253,6 +260,37 @@ elif [ -n "$silent" ]; then
 else
 	ok "named mutants ($nnamed malformed files, each refused with a \
 message)"
+fi
+
+# --- an overflowing count must be caught by the length check, not by luck
+# downstream. Being refused is not enough: a 32-bit block length wraps to a
+# small number, passes the bounds check, and the file is then refused anyway
+# when calloc fails or the cursor runs out -- after a multi-gigabyte
+# allocation request from a four-kilobyte file. So what is asserted is which
+# check refused it, which is what the message names.
+ovf_ok=1
+for blk in 1 2; do
+	for m in timecnt-overflow timecnt-wrap leapcnt-overflow \
+		 charcnt-overflow; do
+		python3 "$work/craft.py" "$work/real" "$m" "$work/m.bin" \
+			"$blk" || continue
+		timeout 10 "$TZF" -l "$work/m.bin" >/dev/null 2>"$work/err"
+		rc=$?
+		if [ "$rc" -ne 1 ]; then
+			echo "       $m($blk) exited $rc, wanted 1"
+			ovf_ok=0
+		elif ! grep -q 'block needs' "$work/err"; then
+			echo "       $m($blk) refused by something other than \
+the length check: $(head -1 "$work/err")"
+			ovf_ok=0
+		fi
+	done
+done
+if [ "$ovf_ok" -eq 1 ]; then
+	ok "overflowing counts are refused by the block-length check (8 \
+files, both blocks)"
+else
+	bad "an overflowing count was not refused by the block-length check"
 fi
 
 # --- the v1 block of a v2+ file is skipped, not validated. That is what both
