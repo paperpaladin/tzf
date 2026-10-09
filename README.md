@@ -410,7 +410,7 @@ half of a pair is legal and would be answered wrongly.
 
 ## Design
 
-One file, ~800 lines, four layers, each depending only on the one below.
+One file, ~970 lines, four layers, each depending only on the one below.
 
 **The cursor** (`Rd`). A buffer, a length, a position, a sticky error flag.
 Every read of the file goes through it and `rd_take` is the only thing in the
