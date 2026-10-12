@@ -269,11 +269,13 @@ fi
 # allocation request from a four-kilobyte file. So what is asserted is which
 # check refused it, which is what the message names.
 ovf_ok=1
+ovf_n=0
 for blk in 1 2; do
 	for m in timecnt-overflow timecnt-wrap leapcnt-overflow \
 		 charcnt-overflow; do
 		python3 "$work/craft.py" "$work/real" "$m" "$work/m.bin" \
 			"$blk" || continue
+		ovf_n=$((ovf_n + 1))
 		timeout 10 "$TZF" -l "$work/m.bin" >/dev/null 2>"$work/err"
 		rc=$?
 		if [ "$rc" -ne 1 ]; then
@@ -286,8 +288,16 @@ the length check: $(head -1 "$work/err")"
 		fi
 	done
 done
-if [ "$ovf_ok" -eq 1 ]; then
-	ok "overflowing counts are refused by the block-length check (8 \
+# "8 files, both blocks" was a hard-coded string in the ok() message, and the
+# loop's `|| continue` meant a craft.py that could not build anything simply
+# produced no iterations: ovf_ok stayed 1 and this passed having tested zero
+# files. Running the suite against an empty ZONEDIR produced 62 craft.py
+# tracebacks and this line still read "ok ... (8 files, both blocks)". The
+# sibling named-mutant sweep is guarded (`nnamed < 30`); these two were not.
+if [ "$ovf_n" -ne 8 ]; then
+	bad "the overflow sweep built $ovf_n of 8 files, so it proves less than it says"
+elif [ "$ovf_ok" -eq 1 ]; then
+	ok "overflowing counts are refused by the block-length check ($ovf_n \
 files, both blocks)"
 else
 	bad "an overflowing count was not refused by the block-length check"
@@ -299,10 +309,12 @@ fi
 # that quietly fell back to the v1 block would fail this and the comparison
 # above at the same time.
 v1ignored=1
+v1_n=0
 "$TZF" -l "$work/real" 4102444800 > "$work/ctl.txt" 2>&1
 for m in typeidx-oob abbrind-oob abbr-unterminated times-unsorted \
 	 utoff-reserved isdst-two; do
 	python3 "$work/craft.py" "$work/real" "$m" "$work/m.bin" 1 || continue
+	v1_n=$((v1_n + 1))
 	if ! "$TZF" -l "$work/m.bin" 4102444800 > "$work/mut.txt" 2>&1; then
 		echo "       v1 $m made tzf fail on a file it does not read"
 		v1ignored=0
@@ -311,8 +323,12 @@ for m in typeidx-oob abbrind-oob abbr-unterminated times-unsorted \
 		v1ignored=0
 	fi
 done
-if [ "$v1ignored" -eq 1 ]; then
-	ok "the v1 block of a v2+ file is skipped, not consulted (6 \
+# Same shape as the overflow sweep above: "6 corruptions" was a string, and
+# `|| continue` with no counter meant zero corruptions passed this.
+if [ "$v1_n" -ne 6 ]; then
+	bad "the v1-block sweep built $v1_n of 6 corruptions, so it proves less than it says"
+elif [ "$v1ignored" -eq 1 ]; then
+	ok "the v1 block of a v2+ file is skipped, not consulted ($v1_n \
 corruptions, identical output)"
 else
 	bad "the v1 block of a v2+ file leaked into the answer"
