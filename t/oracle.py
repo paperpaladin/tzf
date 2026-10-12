@@ -400,7 +400,8 @@ def main():
     if len(zones) < 100:
         bad("corpus (%d TZif files under %s; expected hundreds)"
             % (len(zones), zonedir))
-        print("\n%d passed, %d failed" % (pass_n, fail_n))
+        print("\noracle.py subtotal: %d of %d checks passed"
+              % (pass_n, pass_n + fail_n))
         return 1
     ok("corpus (%d TZif files under %s)" % (len(zones), zonedir))
 
@@ -451,7 +452,16 @@ def main():
         ok("v1_differs_from_v2 (%d of %d manufactured pairs differ from "
            "their v2+ parent)" % (diff, len(v1)))
 
-    print("\n%d passed, %d failed" % (pass_n, fail_n))
+    # Deliberately NOT "N passed, M failed". t/run.sh adds these very ok and
+    # FAIL lines into its own counters, so its closing "34 passed, 0 failed"
+    # already contains all of these -- and the portfolio's extract.py sums
+    # every line matching "N passed, M failed" in a suite's output, which
+    # turned 34 into 59. cc legitimately prints two such lines because its
+    # `make test` runs two independent harnesses; this one is a subtotal
+    # inside a total, and saying so in different words is what tells the two
+    # cases apart.
+    print("\noracle.py subtotal: %d of %d checks passed (counted again in the"
+          " total below)" % (pass_n, pass_n + fail_n))
     print("compared %d real zones, %d transitions" % (nz, nt))
     return 1 if fail_n else 0
 

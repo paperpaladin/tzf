@@ -172,12 +172,15 @@ most likely way for a differential suite to be worthless.
 
 ### The corpus
 
-436 TZif regular files under `/usr/share/zoneinfo`, 30845 explicit transitions,
+436 TZif regular files under `/usr/share/zoneinfo`, 26175 explicit transitions
+in the 64-bit blocks tzf reads (25626 more in the v1 blocks it skips),
 93 distinct TZ footers. The brief for this project said "versions 1 through 3";
-**the machine disagrees.** 428 files are version 2 and 8 are version 3
+**the machine disagrees.** 429 files are version 2 and 7 are version 3
 (`America/Nuuk`, `America/Santiago`, `America/Scoresbysund`, `Asia/Gaza`,
-`Asia/Hebron`, `Asia/Jerusalem`, `Asia/Tel_Aviv`, `Pacific/Easter`), and **not
-one version 1 file exists here**. Neither does `right/` or `posix/`, so there
+`Asia/Hebron`, `Asia/Jerusalem`, `Pacific/Easter`), and **not one version 1
+file exists here**. This said 428 and 8, with `Asia/Tel_Aviv` in the list --
+which is a symlink to `Jerusalem` and so is not one of the 436 regular files
+the corpus is defined as, excluded by `oracle.py`'s own islink filter. Neither does `right/` or `posix/`, so there
 is no leap-second corpus and no second corpus to keep separate.
 
 The version 1 gap mattered, because a reader that handles only the 64-bit block
@@ -188,12 +191,18 @@ them a corpus rather than a fixture: 28 of the 51 differ from their v2+ parent,
 and that count is asserted.
 
 The version 3 files are not decoration. Their footers are where the format's
-extensions live: `Asia/Gaza` fires at `M3.4.4/50` -- hour **50**, two days and
-two hours past the fourth Thursday of March -- `Asia/Jerusalem` at `/26`,
-`America/Nuuk` at `/-1`, `America/Santiago` and `Pacific/Easter` at `/24`,
-`Pacific/Chatham` at `/2:45`. A parser that clamps the transition hour to
-0..24, which is all version 2 allows, gets five zones wrong and reports no
-error.
+extensions live. Exactly five zones carry a transition hour outside 0..24,
+which is all version 2 allows: `Asia/Gaza` and `Asia/Hebron` fire at
+`M3.4.4/50` -- hour **50**, two days and two hours past the fourth Thursday of
+March -- `Asia/Jerusalem` at `/26`, and `America/Nuuk` and
+`America/Scoresbysund` at `/-1`. A parser that clamps the hour to 0..24 gets
+those five wrong and reports no error.
+
+The count was right and three of the examples were not: this named
+`America/Santiago` and `Pacific/Easter` at `/24` and `Pacific/Chatham` at
+`/2:45`, all three of which are *inside* 0..24 and so unaffected by a clamp
+(Easter's footer is `/22`), while omitting Hebron and Scoresbysund, which are
+two of the five.
 
 ## What the oracles found, including about themselves
 
