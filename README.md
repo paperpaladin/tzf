@@ -107,7 +107,7 @@ also excludes the extreme-representable probe lines that open and close every
 The probe instants for the Python comparison are the union of both
 implementations' transition lists, plus one either side of each, plus a grid
 through the TZ-footer era where there are no explicit transitions to aim at.
-The union matters: probing only our own transitions would miss one we dropped.
+That union matters: probing only our own transitions would miss one we dropped.
 
 ```
 $ make test
@@ -353,8 +353,7 @@ wraps to another huge number and fails a bounds check anyway. The block costs
 behalf of a four-kilobyte file, and is still refused, a moment later, when
 the allocation fails or the cursor runs out. Being refused was never the point.
 The suite now asserts **which check refused it**, by requiring the diagnostic
-to be the block-length one, and the mutation dies on that assertion. The 1 MiB
-file cap plus a 64-bit block length is also the only reason every allocation in
+to be the block-length one, and the mutation dies on that assertion. That 1 MiB cap plus a 64-bit block length is also the only reason every allocation in
 the program is bounded by the file size.
 
 One survivor is provably equivalent. Replacing the
@@ -432,7 +431,7 @@ The whole file is read into one `malloc` buffer, not `mmap`ed,
 deliberately: a file truncated under us yields our error message instead of
 `SIGBUS`.
 
-The format. The six counts are validated against each other before anything
+The format. Six counts are validated against each other before anything
 is sized from them, and the block length is computed in `uint64_t` for the
 reason the mutation sweep made concrete. Transition times are checked for
 strict ascent and every index against its table at parse time, not at use time:
