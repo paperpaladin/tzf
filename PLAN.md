@@ -70,7 +70,7 @@ Ranked, by how little of it we control:
 1. `zdump -v` from glibc (`/usr/bin/zdump`, glibc 2.41), run over all 436
    real TZif files on this machine. A C implementation of the same RFC written
    by other people and shipped to every Linux user. Where we disagree, we are
-   wrong. Facts are extracted from its text and compared as lists: its output
+   wrong. Facts are extracted from its text and compared as lists. Its output
    format and ours have nothing in common and diffing them would measure
    rendering.
 2. Python's `zoneinfo` (CPython 3.13 stdlib), reading the same bytes in a
