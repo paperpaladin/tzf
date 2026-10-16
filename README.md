@@ -146,16 +146,77 @@ ok   corruption sweep (209 mutants, 120 rejected, 0 crashed or hung)
 ok   a directory, a text file, an empty file and a missing path all error cleanly
 ok   usage errors exit 2, distinct from malformed input's 1
 ok   an out-of-range instant is refused rather than answered
+ok   indicators: 436 files, 209 with the arrays present, 209 with a set bit, 0 disagree
 
 35 passed, 0 failed
+[overread] TZF_PLANT_OVERREAD: the sanitizer sees the read one byte past the data
+[overread] TZF_PLANT_FOOTER_OVERREAD: the sanitizer sees the read one byte past the data
 ```
 
-`make test-asan` reruns all 34 under `-fsanitize=address,undefined` with leak
+`make test-asan` reruns all 35 under `-fsanitize=address,undefined` with leak
 detection on (also clean). `ASAN_OPTIONS=exitcode=86` is load-bearing there:
 ASan's default exit status on a report is 1, also tzf's "this file is
 malformed" status, and most of this suite's length is spent asserting exactly
 that, so without it the target silently could not fail and a heap overflow
 would score as a correct diagnostic.
+
+### The sanitizer was switched off over the whole parser
+
+That paragraph was true and worth much less than it read, because ASan can
+only see a read that leaves the allocation it was given, and `slurp` was
+handing the parser an allocation far larger than the file. The read loop
+doubles from 65536 bytes and returned the buffer at its capacity, so every
+zone file in tzdb -- all of them under 4 KiB -- was parsed inside a 64 KB
+object with 60 KB of slack that ASan considers legitimately allocated. A read
+one byte past the end of the data lands in the middle of it and no sanitizer
+can say a word.
+
+Measured rather than argued. `-DTZF_PLANT_OVERREAD` compiles one deliberate
+read of `b[n]` into `slurp`, and against `America/New_York` the untrimmed
+build printed its whole `-i` output and exited 0:
+
+```
+file /usr/share/zoneinfo/America/New_York
+version 2
+block v2
+...
+tz_dst 1
+```
+
+Not one sanitizer line, under `-fsanitize=address,undefined` with
+`detect_leaks=1`. The fix is one `realloc` down to exactly `n` after the loop,
+and the identical read is then reported:
+
+```
+tzf.c:263:30: runtime error: load of address 0x520000000e60 with insufficient
+space for an object of type 'uint8_t'
+==793210==ERROR: AddressSanitizer: heap-buffer-overflow on address
+0x520000000e60 at pc 0x55d366f94e3f
+READ of size 1 at 0x520000000e60 thread T0
+    #0 in slurp tzf.c:263
+0x520000000e60 is located 0 bytes after 3552-byte region
+```
+
+`0 bytes after 3552-byte region` is the point: the allocation is now the file.
+An empty file returns NULL rather than `realloc(b, 0)`, whose result is
+implementation-defined, so a zero-byte file has no valid byte to read at all;
+`tz_read` refuses anything under 44 bytes before it touches the pointer.
+
+Nine instances of this shape had been found across the sibling repos before
+this one. `slurp` is the tenth and `footer_parse` the eleventh, both in this
+file, because the first fix does not travel on its own: `footer_parse` copied
+the TZ string into a fixed `char buf[128]`, and every real footer is around
+25 bytes, so the same read past the terminator was
+equally invisible: exit 0, nothing printed. Sized to `footerlen + 1` it is
+caught -- `index 23 out of bounds for type 'char [*]'` -- and the 128-byte
+refusal above it still bounds the stack use before the length sizes anything.
+
+`make overread` is the gate, run by `make test`. It compiles the probe once per
+plant and requires exit 86, the same sanitizer-only status `test-asan` uses, so
+"the sanitizer reported something" cannot be confused with a segfault, a usage
+error or a clean refusal. Both halves were watched failing: deleting the
+`realloc` turns the first red with `exit 0`, restoring `char buf[128]` turns
+the second red the same way.
 
 ### Three guards against a suite that passes while doing nothing
 
@@ -402,10 +463,12 @@ half of a pair is legal and would be answered wrongly.
 - `-i`'s header counts are printed and checked by nothing. A swapped
   `isutcnt`/`isstdcnt` pair would pass the whole suite, because the two are
   equal in every file in tzdb.
-- Nothing in the suite proves the ASan target can fail. It is green, which
-  is exactly how `inflate`'s ASan target looked while it was incapable of
-  failing. The exit-code collision is handled and a planted overflow was
-  watched being caught by hand once. By hand does not stay proved.
+- The ASan target is proved able to fail only for the two planted over-reads
+  of `make overread`. The exit-code collision is handled, and those two
+  buffers are now exactly sized and gated, which is more than "it is green".
+  Nothing proves the same for the four `calloc`s in `block_read`: they are
+  sized from the counts rather than rounded up, so there is no slack by
+  construction, and that is an argument, not a measurement.
 - Big-endian hosts are untested. Every multi-byte read goes through
   `be32`/`be64`, so this should be a no-op, and "should be a no-op" is the
   sentence that precedes every byte-order bug.

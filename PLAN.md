@@ -174,11 +174,20 @@ Ranked, by how little of it we control:
       why: the counts are printed and the suite never reads them. A swapped
       `isutcnt`/`isstdcnt` pair would pass everything today, because the two
       are equal in every file in tzdb.
-- [ ] Assert the ASan target can fail, inside the suite
+- [x] Assert the ASan target can fail, inside the suite
       why: `test-asan` is green, exactly how `inflate`'s ASan target
       looked while it could not fail. The exit-code collision is handled, but
       nothing in the suite proves that by watching a planted overflow get
       caught. It was proved by hand once; by hand does not stay proved.
+      done: `make overread`, run by `make test`, builds the probe twice and
+      requires exit 86 each time. Writing it found the reason the target
+      could not fail: `slurp` returned the doubling buffer at its capacity,
+      so a 3552-byte file was parsed inside a 65536-byte allocation and the
+      planted read of `b[n]` exited 0 with no sanitizer output. One
+      `realloc` down to `n` and it is a heap-buffer-overflow 0 bytes after a
+      3552-byte region. `footer_parse`'s `char buf[128]` holding a 25-byte
+      footer was the same shape in the same file and is now sized to the
+      footer. Both halves were watched going red.
 
 ### Milestone 2: corpora we do not have
 
