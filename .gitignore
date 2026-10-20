@@ -1,5 +1,6 @@
 tzf
 tzf-asan
+tzf-probe
 t/tmp/
 *.o
 t/__pycache__/

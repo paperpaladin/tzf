@@ -226,7 +226,42 @@ static uint8_t *slurp(const char *path, size_t *len)
 		fail("%s: read error", path);
 	}
 	fclose(f);
+	/* Shrink to exactly n. The loop above doubles, so a 3.5 KB zone file
+	 * sits in a 64 KB allocation and every read past the data end lands
+	 * 60 KB inside a live object, which ASan considers legitimately
+	 * allocated: a buffer larger than its data turns the sanitizer off
+	 * over the whole parser. Measured here before the trim, with
+	 * -DTZF_PLANT_OVERREAD below: a read of b[n] produced exit 0 and no
+	 * sanitizer output at all. Nothing in the parser wants a NUL at b[n]
+	 * -- the footer is framed by newlines, bounded by `rest`, and copied
+	 * out before anything walks it -- so the exact length is enough.
+	 *
+	 * n == 0 returns NULL deliberately rather than realloc(b, 0), whose
+	 * result is implementation-defined: an empty file then has no valid
+	 * byte to read, which is the honest shape, and tz_read refuses
+	 * anything under 44 bytes before it touches the pointer. */
+	if (n == 0) {
+		free(b);
+		*len = 0;
+		return NULL;
+	}
+	uint8_t *shrunk = realloc(b, n);
+	if (!shrunk) {
+		free(b);
+		fail("out of memory");
+	}
+	b = shrunk;
 	*len = n;
+#ifdef TZF_PLANT_OVERREAD
+	/* Compiled only by `make overread`. A deliberate read one byte past the
+	 * data, whose point is not the read but whether the SANITIZER SEES IT.
+	 * Without the trim above, b is the doubling capacity (65536 for every
+	 * real zone file, which is under 4 KiB), so this read lands tens of
+	 * kilobytes inside a live allocation and ASan says nothing: measured,
+	 * the untrimmed build printed the whole -i output and not one
+	 * sanitizer line. */
+	{ volatile uint8_t probe = b[n]; (void)probe; }
+#endif
 	return b;
 }
 
@@ -622,9 +657,24 @@ static void footer_parse(Tz *z)
 	 * handing it to a parser that walks on a terminator. */
 	if (z->footerlen >= 128)
 		fail("TZ string is %zu bytes, refusing", z->footerlen);
-	char buf[128];
+	/* Sized to the footer, not to the cap above, for the same reason slurp()
+	 * shrinks: a 25-byte footer in a 128-byte buffer is 102 bytes of slack
+	 * the sanitizer counts as part of the object, so a read past the
+	 * terminator here was invisible. Measured both ways with
+	 * -DTZF_PLANT_FOOTER_OVERREAD: with char buf[128] the planted read
+	 * exits 0 and prints nothing, with the exact size UBSan says "index 23
+	 * out of bounds for type 'char [*]'". The refusal above still bounds
+	 * this at 128 bytes of stack, so the length is checked before it sizes
+	 * anything. */
+	char buf[z->footerlen + 1];
 	memcpy(buf, z->footer, z->footerlen);
 	buf[z->footerlen] = '\0';
+#ifdef TZF_PLANT_FOOTER_OVERREAD
+	/* Compiled only by `make overread`: the second half of the same gate.
+	 * The parser below walks on the terminator, so one byte past it is the
+	 * read a missing terminator would make. */
+	{ volatile char probe = buf[z->footerlen + 1]; (void)probe; }
+#endif
 	const char *p = buf;
 
 	pf_abbr(&p, o->std, "std");
